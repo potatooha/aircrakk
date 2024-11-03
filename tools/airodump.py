@@ -53,10 +53,11 @@ ACCESS_POINT_COLUMNS = {
 # BSSID              STATION            PWR    Rate    Lost   Frames  Notes  Probes
 # D8:47:32:5A:A3:B2  10:08:C1:11:2B:D5  -94    0 - 1      0        2
 # F0:B4:D2:A6:AD:43  22:1F:3F:B3:9D:60  -91    0 - 1e     0        1
+# F4:E5:78:AC:66:E7  3C:0B:4F:B2:9B:4E   -1   12e- 0      0        7
 STATION_COLUMNS = {
     "BSSID":   Column(width=19, required=True),
     "STATION": Column(width=19, required=True),
-    "PWR":     Column(width=7, required=True),
+    "PWR":     Column(width=6, required=True),
     # Other columns are ignored
 }
 
@@ -71,6 +72,7 @@ class _DumpReader(Reader):
         super().__init__()
         self._current_block = None
         self._lock = threading.Lock()
+        self._has_handshake = False
         self._access_points = {}
         self._stations = {}
 
@@ -80,6 +82,10 @@ class _DumpReader(Reader):
             stations = {key: value for key, value in self._stations.items()}
 
         return access_points, stations
+
+    def has_handshake(self) -> bool:
+        with self._lock:
+            return self._has_handshake
 
     def _process_stdout(self, line: bytes):
         line = line.decode()
@@ -101,6 +107,11 @@ class _DumpReader(Reader):
 
         elif all(token in tokens for token in ["CH", "Elapsed:"]):
             self._current_block = None
+            # TODO: implement me
+            if "handshake" in line:
+                with self._lock:
+                    self._has_handshake = True
+
             return
 
         # Items in blocks
@@ -119,40 +130,80 @@ class _DumpReader(Reader):
 
     @staticmethod
     def _parse_access_point(line: str) -> AccessPoint:
-        columns = parse_row(line, ACCESS_POINT_COLUMNS)
+        try:
+            columns = parse_row(line, ACCESS_POINT_COLUMNS)
 
-        return AccessPoint(
-            bssid=columns[0],
-            power=int(columns[1]),
-            beacons=int(columns[2]),
-            packets=int(columns[3]),
-            packets_per_second=int(columns[4]),
-            channel=int(columns[5]),
-            speed=int(columns[6]),
-            encryption=columns[7],
-            cipher=columns[8],
-            protocol=columns[9],
-            name=None if columns[10] == "<length:  0>" else columns[10],
-        )
+            return AccessPoint(
+                bssid=columns[0],
+                power=int(columns[1]),
+                beacons=int(columns[2]),
+                packets=int(columns[3]),
+                packets_per_second=int(columns[4]),
+                channel=int(columns[5]),
+                speed=int(columns[6]),
+                encryption=columns[7],
+                cipher=columns[8],
+                protocol=columns[9],
+                name=None if columns[10] == "<length:  0>" else columns[10],
+            )
+
+        except Exception:
+            raise RuntimeError(f"Failed to parse line: '{line}'")
 
     @staticmethod
     def _parse_station(line: str) -> AccessPoint | None:
-        if "(not associated)" in line:
-            return None
+        try:
+            if "(not associated)" in line:
+                return None
 
-        columns = parse_row(line, STATION_COLUMNS)
+            columns = parse_row(line, STATION_COLUMNS)
 
-        return Station(
-            bssid=columns[0],
-            station=columns[1],
-            power=int(columns[2]),
-        )
+            return Station(
+                bssid=columns[0],
+                station=columns[1],
+                power=int(columns[2]),
+            )
+
+        except Exception:
+            raise RuntimeError(f"Failed to parse line: '{line}'")
 
 
 class Dump(Runner):
-    def __init__(self, iface: str):
+    def __init__(self,
+                 monitoring_iface: str,
+                 *,
+                 channel: int | None = None,
+                 bssid: str | None = None,
+                 dump_prefix: str | None = None):
         self._reader = _DumpReader()
-        super().__init__([AIRODUMP, iface], self._reader)
+
+        args = [
+            AIRODUMP,
+            monitoring_iface
+        ]
+
+        if channel:
+            args.extend([
+                "-c",
+                str(channel),
+            ])
+
+        if bssid:
+            args.extend([
+                "--bssid",
+                bssid,
+            ])
+
+        if dump_prefix:
+            args.extend([
+                "-w",
+                dump_prefix,
+            ])
+
+        super().__init__(args, self._reader)
 
     def get_snapshot(self) -> tuple[dict[str, AccessPoint], dict[str, Station]]:
         return self._reader.get_snapshot()
+
+    def has_handshake(self) -> bool:
+        return self._reader.has_handshake()

@@ -7,20 +7,32 @@ import subprocess
 AIRMON = "airmon-ng"
 
 
-def check_availability():
-    result = subprocess.run([AIRMON], capture_output=True)
+def _run(args: list[str] = []):
+    args = [AIRMON] + args
+
+    result = subprocess.run(args, capture_output=True)
+
     if result.returncode:
         print(result.stdout.decode())
-        sys.exit(result.returncode)
+        raise RuntimeError(f"{args} failed: {result.returncode}")
+
+
+def _check_availability():
+    _run()
 
 
 @contextlib.contextmanager
 def monitoring_session(iface: str):
+    _check_availability()
+
     print("Start monitoring...")
-    subprocess.check_call([AIRMON, "start", iface], stdout=subprocess.DEVNULL)
+    _run(["start", iface])
 
     monitoring_iface = iface + "mon"
-    yield monitoring_iface
 
-    print("Stop monitoring...")
-    subprocess.check_call([AIRMON, "stop", monitoring_iface], stdout=subprocess.DEVNULL)
+    try:
+        yield monitoring_iface
+
+    finally:
+        print("Stop monitoring...")
+        _run(["stop", monitoring_iface])

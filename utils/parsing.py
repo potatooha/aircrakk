@@ -31,10 +31,10 @@ def column_to_value_or_none(column: str) -> str | None:
     return None if column.isspace() else column.strip()
 
 
-def column_to_value(column: str, what: str, text: str) -> str:
+def column_to_value(column: str, what: str) -> str:
     value = column_to_value_or_none(column)
     if not value:
-        raise RuntimeError(f"Column '{what}' must have a value: '{text}'")
+        raise RuntimeError(f"Column '{what}' must have a value")
 
     return value
 
@@ -57,7 +57,7 @@ def parse_row(text: str, column_info: dict[str, Column]) -> list[str | None]:
         raw_column = raw_columns[index]
         info = column_info[key]
 
-        column = column_to_value(raw_column, key, text) if info.required else column_to_value_or_none(raw_column)
+        column = column_to_value(raw_column, key) if info.required else column_to_value_or_none(raw_column)
         columns.append(column)
 
     return columns
