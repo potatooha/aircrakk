@@ -1,6 +1,5 @@
 from __future__ import annotations
 import contextlib
-import sys
 import subprocess
 
 

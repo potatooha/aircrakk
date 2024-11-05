@@ -22,7 +22,7 @@ class AccessPoint:
     encryption: str | None
     cipher: str | None
     protocol: str | None
-    name: str | None
+    essid: str | None
 
 
 @dataclasses.dataclass
@@ -39,6 +39,24 @@ class Station:
 ACCESS_POINT_COLUMNS = {
     "BSSID":   Column(width=19, required=True),
     "PWR":     Column(width=5,  required=True),
+    "Beacons": Column(width=7,  required=True),
+    "#Data,":  Column(width=9,  required=True),
+    "#/s":     Column(width=5,  required=True),
+    "CH":      Column(width=4,  required=True),
+    "MB":      Column(width=5,  required=True),
+    "ENC":     Column(width=7,  required=False),
+    "CIPHER":  Column(width=8,  required=False),
+    "AUTH":    Column(width=5,  required=False),
+    "ESSID":   Column(width=-1, required=True),
+}
+
+# BSSID              PWR RXQ  Beacons    #Data, #/s  CH   MB   ENC CIPHER  AUTH ESSID
+# B3:64:60:E9:35:68  -81  26       14        0    0   1  270   WPA2 CCMP   PSK  Hello Kitty
+# 2F:1D:E7:22:CD:FE  -70   3       11       33   13   1  130   WPA2 CCMP   PSK  azaza
+ACCESS_POINT_COLUMNS_ONE_CHANNEL = {
+    "BSSID":   Column(width=19, required=True),
+    "PWR":     Column(width=4,  required=True),
+    "RXQ":     Column(width=5,  required=True),
     "Beacons": Column(width=7,  required=True),
     "#Data,":  Column(width=9,  required=True),
     "#/s":     Column(width=5,  required=True),
@@ -68,8 +86,9 @@ class _DumpBlock(enum.Enum):
 
 
 class _DumpReader(Reader):
-    def __init__(self):
+    def __init__(self, is_one_channel_mode: bool):
         super().__init__()
+        self._is_one_channel_mode = is_one_channel_mode
         self._current_block = None
         self._lock = threading.Lock()
         self._has_handshake = False
@@ -88,6 +107,7 @@ class _DumpReader(Reader):
             return self._has_handshake
 
     def _process_stdout(self, line: bytes):
+        # Looks fragile, but blue tape should save us
         line = line.decode()
         line = line.strip()
         line = line.removeprefix("\x1b[0K\x1b[1B")
@@ -107,7 +127,7 @@ class _DumpReader(Reader):
 
         elif all(token in tokens for token in ["CH", "Elapsed:"]):
             self._current_block = None
-            # TODO: implement me
+            #  CH  5 ][ Elapsed: 23 mins ][ 2009-07-05 02:33 ][ WPA handshake: A5:12:F7:EB:5A:DD
             if "handshake" in line:
                 with self._lock:
                     self._has_handshake = True
@@ -116,7 +136,7 @@ class _DumpReader(Reader):
 
         # Items in blocks
         if self._current_block == _DumpBlock.ACCESS_POINT_LIST:
-            access_point = _DumpReader._parse_access_point(line)
+            access_point = _DumpReader._parse_access_point(line, self._is_one_channel_mode)
             with self._lock:
                 self._access_points[access_point.bssid] = access_point
             return
@@ -129,9 +149,15 @@ class _DumpReader(Reader):
             return
 
     @staticmethod
-    def _parse_access_point(line: str) -> AccessPoint:
+    def _parse_access_point(line: str, is_one_channel_mode: bool) -> AccessPoint:
         try:
-            columns = parse_row(line, ACCESS_POINT_COLUMNS)
+            column_info = ACCESS_POINT_COLUMNS_ONE_CHANNEL if is_one_channel_mode else ACCESS_POINT_COLUMNS
+            columns = parse_row(line, column_info)
+
+            if is_one_channel_mode:
+                # Just skip `RXQ` column at all
+                rxq_column_index = 2
+                columns = columns[:rxq_column_index] + columns[rxq_column_index + 1:]
 
             return AccessPoint(
                 bssid=columns[0],
@@ -144,7 +170,7 @@ class _DumpReader(Reader):
                 encryption=columns[7],
                 cipher=columns[8],
                 protocol=columns[9],
-                name=None if columns[10] == "<length:  0>" else columns[10],
+                essid=None if columns[10] == "<length:  0>" else columns[10],
             )
 
         except Exception:
@@ -175,11 +201,12 @@ class Dump(Runner):
                  channel: int | None = None,
                  bssid: str | None = None,
                  dump_prefix: str | None = None):
-        self._reader = _DumpReader()
+        self.monitoring_iface = monitoring_iface
+        self._reader = _DumpReader(is_one_channel_mode=channel is not None)
 
         args = [
             AIRODUMP,
-            monitoring_iface
+            self.monitoring_iface
         ]
 
         if channel:

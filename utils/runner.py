@@ -21,9 +21,15 @@ class Reader(Stoppable):
 class Runner:
     def __init__(self, args: list[str], reader: Reader):
         self._reader = reader
-        self._process = subprocess.Popen(args, stdout=subprocess.PIPE)
+        self._process = subprocess.Popen(args, stdout=subprocess.PIPE, stderr=subprocess.DEVNULL)
         self._thread = threading.Thread(target=self._reader, args=[self._process.stdout])
         self._thread.start()
+
+    def poll(self) -> int | None:
+        return self._process.poll()
+
+    def wait(self, timeout_sec: float | None = None) -> int:
+        return self._process.wait(timeout_sec)
 
     def __enter__(self):
         return self
