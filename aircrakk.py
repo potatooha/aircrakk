@@ -287,15 +287,15 @@ def _crack(capture_file_path: Path, wordlist_file_path: Path) -> str | None:
         while True:
             key = crack.get_key_if_found()
             if key:
-                print(f"Found key: '{key}'!")
+                print(f"\x1b[2KFound key: '{key}'!") # FIXME
                 return key
 
             result = crack.poll()
             if result is not None:
                 if result != 0:
-                    print(f"Failed to crack: {result}")
+                    print(f"\x1b[2KFailed to crack: {result}") # FIXME
                 else:
-                    print("\x1b[2KKey is not found", end='\r', flush=True)
+                    print("\x1b[2KKey is not found", end='\r', flush=True) # FIXME
                 return None
 
             passphrase = crack.get_last_passphrase()
@@ -303,7 +303,19 @@ def _crack(capture_file_path: Path, wordlist_file_path: Path) -> str | None:
                 time.sleep(1)
                 continue
 
-            print(f"\x1b[2KLast passphase: '{passphrase}', keep searching...", end='\r', flush=True)
+            line = f"\x1b[2KLast passphase: '{passphrase}'"
+
+            speed = crack.get_speed()
+            if speed:
+                line += ", speed: " + speed
+
+            percentage = crack.get_percentage()
+            if percentage:
+                line += ", done: " + percentage
+
+            line += ", keep searching..."
+
+            print(line, end='\r', flush=True) # FIXME
             time.sleep(1)
 
 
@@ -311,12 +323,17 @@ def crack(capture_file_path: Path, wordlists_config_file_path: Path, statistics_
     wordlists = _get_wordlists_from_config(wordlists_config_file_path)
     _update_wordlist_usage_statistics(statistics_file_path, wordlists)
 
+    key = None
+
     for wordlist, usage in wordlists.items():
         key = _crack(capture_file_path, Path(wordlist))
         if key:
             usage = usage + 1
             wordlists[wordlist] = usage
             break
+
+    if not key:
+        print("Key is not found")
 
     _store_wordlist_usage_statistics(statistics_file_path, wordlists)
 
@@ -367,7 +384,7 @@ def main():
     handshake_parser.add_argument("iface",
                                   help="Wireless iface for monitoring")
     handshake_parser.add_argument("strategy",
-                                  help="Strategy for `aireplay-ng`")
+                                  help="Strategy for `aireplay-ng`") # FIXME
     handshake_parser.add_argument("--channel",
                                   help="Channel of an access point",
                                   type=int,

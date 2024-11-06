@@ -13,7 +13,7 @@ AIRCRACK = "aircrack-ng"
 
 
 class _CrackReader(Reader):
-    """Parses `aircrack-ng`s output key line:
+    """Parses `aircrack-ng`s output:
 
     ```
     Current passphrase: qwerty
@@ -24,8 +24,18 @@ class _CrackReader(Reader):
     def __init__(self):
         super().__init__()
         self._lock = threading.Lock()
+        self._speed = None
+        self._percentage = None
         self._last_passphrase = None
         self._key = None
+
+    def get_speed(self) -> str:
+        with self._lock:
+            return self._speed or ""
+
+    def get_percentage(self) -> str:
+        with self._lock:
+            return self._percentage or ""
 
     def get_last_passphrase(self) -> str:
         """May lose spaces at the end (if it's not a key)."""
@@ -44,6 +54,27 @@ class _CrackReader(Reader):
         line = line.removeprefix("\x1b[8;28H\x1b[2K")
         line = line.removeprefix("\x1b[8;24H")
         line = line.strip()
+
+        # [00:00:01] 4041/1000000 keys tested (6201.38 k/s)
+        match = re.search(r"\[.+\] \d+/\d+ keys tested \((.+)\)", line, flags=re.IGNORECASE)
+        if match:
+            speed = match.group(1)
+
+            with self._lock:
+                self._speed = speed
+
+            # Keep going. The next block is at the same line
+
+        # Time left: --
+        # Time left: 2 minutes, 40 seconds                           0.40%
+        match = re.search(r"Time left: .+(\d+\.\d+%)", line, flags=re.IGNORECASE)
+        if match:
+            percentage = match.group(1)
+
+            with self._lock:
+                self._percentage = percentage
+
+            return
 
         match = re.match(r"Current passphrase: (.*)", line, flags=re.IGNORECASE)
         if match:
@@ -88,6 +119,12 @@ class Crack(Runner):
 
         super().__init__(args, self._reader)
 
+    def get_speed(self) -> str:
+        return self._reader.get_speed()
+
+    def get_percentage(self) -> str:
+        return self._reader.get_percentage()
+
     def get_last_passphrase(self) -> str:
         return self._reader.get_last_passphrase()
 
@@ -95,15 +132,6 @@ class Crack(Runner):
         return self._reader.get_key_if_found()
 
 
-#def _run_blindly(args: list[str]) -> int:
-#    args = [AIRCRACK] + args
-#
-#    result = subprocess.run(args, capture_output=True)
-#    return result.returncode
-
-
 def is_capture_file_ok(path: Path) -> str:
     with Crack(path, FAKE_WORDLIST_FILE_PATH) as crack:
         return crack.wait() == 0
-
-    #return _run_blindly(path, FAKE_WORDLIST_FILE_PATH) == 0
