@@ -3,7 +3,7 @@ import contextlib
 import subprocess
 
 
-AIRMON = "airmon-ng"
+AIRMON = 'airmon-ng'
 
 
 def _run(args: list[str] = []):

@@ -1,9 +1,8 @@
 from __future__ import annotations
-import contextlib
 import subprocess
 
 
-AIREPLAY = "aireplay-ng"
+AIREPLAY = 'aireplay-ng'
 
 
 def _run(args: list[str]):

@@ -1,24 +1,27 @@
 from __future__ import annotations
 from pathlib import Path
 import re
-import subprocess
 import threading
 
-
+from tools.crack_info import CrackProgressInfo
 from utils.runner import Reader, Runner
 from wordlists.paths import FAKE_WORDLIST_FILE_PATH
 
 
-AIRCRACK = "aircrack-ng"
+AIRCRACK = 'aircrack-ng'
 
 
-class _CrackReader(Reader):
+class _AircrackReader(Reader):
     """Parses `aircrack-ng`s output:
 
     ```
-    Current passphrase: qwerty
-    KEY NOT FOUND
-    KEY FOUND! [ 12345678 ]
+    [00:00:05] 20859/10303727 keys tested (16857.63 k/s)
+
+    Time left: 10 minutes, 9 seconds                           0.20%
+
+                     Current passphrase: helloworld
+
+    ...
     ```
     """
     def __init__(self):
@@ -29,18 +32,13 @@ class _CrackReader(Reader):
         self._last_passphrase = None
         self._key = None
 
-    def get_speed(self) -> str:
+    def get_progress_info(self) -> CrackProgressInfo:
         with self._lock:
-            return self._speed or ""
+            speed = self._speed
+            percentage = self._percentage
+            last_passphrase = self._last_passphrase
 
-    def get_percentage(self) -> str:
-        with self._lock:
-            return self._percentage or ""
-
-    def get_last_passphrase(self) -> str:
-        """May lose spaces at the end (if it's not a key)."""
-        with self._lock:
-            return self._last_passphrase or ""
+        return CrackProgressInfo(speed, percentage, last_passphrase)
 
     def get_key_if_found(self) -> str | None:
         with self._lock:
@@ -76,6 +74,7 @@ class _CrackReader(Reader):
 
             return
 
+        # Current passphrase: qwerty
         match = re.match(r"Current passphrase: (.*)", line, flags=re.IGNORECASE)
         if match:
             passphrase = match.group(1)
@@ -88,6 +87,7 @@ class _CrackReader(Reader):
 
             return
 
+        # KEY FOUND! [ 12345678 ]
         match = re.match(r"KEY FOUND! \[ (.*) \]", line, flags=re.IGNORECASE)
         if match:
             passphrase = match.group(1)
@@ -101,15 +101,19 @@ class _CrackReader(Reader):
 
             return
 
+        # KEY NOT FOUND
         if line == "KEY NOT FOUND":
             with self._lock:
                 if self._key:
                     raise RuntimeError(f"Unexpected line: '{line}'")
 
 
-class Crack(Runner):
-    def __init__(self, capture_file_path: Path, wordlist_file_path: Path):
-        self._reader = _CrackReader()
+class Aircrack(Runner):
+    def __init__(self,
+                 capture_file_path: Path,
+                 *,
+                 wordlist_file_path: Path):
+        self._reader = _AircrackReader()
 
         args = [
             AIRCRACK,
@@ -119,19 +123,13 @@ class Crack(Runner):
 
         super().__init__(args, self._reader)
 
-    def get_speed(self) -> str:
-        return self._reader.get_speed()
-
-    def get_percentage(self) -> str:
-        return self._reader.get_percentage()
-
-    def get_last_passphrase(self) -> str:
-        return self._reader.get_last_passphrase()
+    def get_progress_info(self) -> CrackProgressInfo:
+        return self._reader.get_progress_info()
 
     def get_key_if_found(self) -> str | None:
         return self._reader.get_key_if_found()
 
-
-def is_capture_file_ok(path: Path) -> str:
-    with Crack(path, FAKE_WORDLIST_FILE_PATH) as crack:
-        return crack.wait() == 0
+    @staticmethod
+    def is_capture_file_ok(path: Path) -> bool:
+        with Aircrack(path, FAKE_WORDLIST_FILE_PATH) as crack:
+            return crack.wait() == 0

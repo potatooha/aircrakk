@@ -8,11 +8,13 @@ import sys
 import tempfile
 import time
 
-from tools.aircrack import Crack, is_capture_file_ok
+from tools.aircrack import Aircrack
 from tools.aireplay import fakeauth, deauth
-from tools.airodump import AccessPoint, Station, Dump
 from tools.airmon import monitoring_session
+from tools.airodump import AccessPoint, Station, Dump
+from tools.cap2hccapx import convert_aircrack_capture_to_hashcat_format
 from tools.file import is_text_file
+from tools.hashcat import Hashcat
 from utils.dumping import get_table, get_dataclass_getter
 
 
@@ -107,7 +109,7 @@ def _get_capture_file_path(dir: Path) -> Path:
 
 def _is_handshake_accepted(dir: Path) -> bool:
     path = _get_capture_file_path(dir)
-    return is_capture_file_ok(path)
+    return Aircrack.is_capture_file_ok(path)
 
 
 def _handshake(dump: Dump,
@@ -280,17 +282,20 @@ def _store_wordlist_usage_statistics(path: Path, wordlists: dict[str, int]):
         json.dump(wordlists, file, indent=4)
 
 
-def _crack(capture_file_path: Path, wordlist_file_path: Path) -> str | None:
+def _crack(tool_cls,
+           capture_file_path: Path,
+           wordlist_file_path: Path) -> str | None:
     print(f"Trying to crack {str(capture_file_path)} by {str(wordlist_file_path)}...")
 
-    with Crack(capture_file_path, wordlist_file_path) as crack:
+    with tool_cls(capture_file_path,
+              wordlist_file_path=wordlist_file_path) as tool:
         while True:
-            key = crack.get_key_if_found()
+            key = tool.get_key_if_found()
             if key:
                 print(f"\x1b[2KFound key: '{key}'!") # FIXME
                 return key
 
-            result = crack.poll()
+            result = tool.poll()
             if result is not None:
                 if result != 0:
                     print(f"\x1b[2KFailed to crack: {result}") # FIXME
@@ -298,20 +303,18 @@ def _crack(capture_file_path: Path, wordlist_file_path: Path) -> str | None:
                     print("\x1b[2KKey is not found", end='\r', flush=True) # FIXME
                 return None
 
-            passphrase = crack.get_last_passphrase()
-            if not passphrase:
+            info = tool.get_progress_info()
+            if not info.last_passphrase:
                 time.sleep(1)
                 continue
 
-            line = f"\x1b[2KLast passphase: '{passphrase}'"
+            line = f"\x1b[2KLast passphase: '{info.last_passphrase}'"
 
-            speed = crack.get_speed()
-            if speed:
-                line += ", speed: " + speed
+            if info.speed:
+                line += ", speed: " + info.speed
 
-            percentage = crack.get_percentage()
-            if percentage:
-                line += ", done: " + percentage
+            if info.percentage:
+                line += ", done: " + info.percentage
 
             line += ", keep searching..."
 
@@ -319,14 +322,26 @@ def _crack(capture_file_path: Path, wordlist_file_path: Path) -> str | None:
             time.sleep(1)
 
 
-def crack(capture_file_path: Path, wordlists_config_file_path: Path, statistics_file_path: Path):
+def crack(capture_file_path: Path,
+          wordlists_config_file_path: Path,
+          statistics_file_path: Path,
+          prefer_aircrack: bool):
     wordlists = _get_wordlists_from_config(wordlists_config_file_path)
     _update_wordlist_usage_statistics(statistics_file_path, wordlists)
 
     key = None
 
+    if prefer_aircrack:
+        tool_cls = Aircrack
+
+    else:
+        tool_cls = Hashcat
+
+        hashcat_capture_file_path = capture_file_path.with_suffix(".hccapx")
+        capture_file_path = convert_aircrack_capture_to_hashcat_format(capture_file_path, hashcat_capture_file_path)
+
     for wordlist, usage in wordlists.items():
-        key = _crack(capture_file_path, Path(wordlist))
+        key = _crack(tool_cls, capture_file_path, Path(wordlist))
         if key:
             usage = usage + 1
             wordlists[wordlist] = usage
@@ -355,7 +370,7 @@ def on_wordlists(args: argparse.Namespace):
 
 
 def on_crack(args: argparse.Namespace):
-    crack(args.capture, args.wordlists, args.statistics)
+    crack(args.capture, args.wordlists, args.statistics, args.prefer_aircrack)
 
 
 def main():
@@ -429,6 +444,8 @@ def main():
                               help="Wordlist statistics file (will create a new one if it not exists)",
                               type=Path,
                               required=True)
+    crack_parser.add_argument("--prefer_aircrack",
+                              action='store_true')
     crack_parser.set_defaults(handler=on_crack)
 
     args = parser.parse_args()

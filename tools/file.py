@@ -4,7 +4,7 @@ import re
 import subprocess
 
 
-FILE = "file"
+FILE = 'file'
 
 
 def _run(args: list[str]) -> str:

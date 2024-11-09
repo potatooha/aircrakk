@@ -7,7 +7,7 @@ from utils.parsing import Column, parse_row
 from utils.runner import Reader, Runner
 
 
-AIRODUMP = "airodump-ng"
+AIRODUMP = 'airodump-ng'
 
 
 @dataclasses.dataclass
