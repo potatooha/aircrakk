@@ -3,9 +3,8 @@ from pathlib import Path
 import re
 import threading
 
-from tools.crack_info import CrackProgressInfo
+from tools.crack_info import CrackProgressInfo, CrackExitInfo
 from utils.runner import Reader, Writer, Runner
-from wordlists.paths import FAKE_WORDLIST_FILE_PATH
 
 
 HASHCAT = 'hashcat'
@@ -54,7 +53,7 @@ class _HashcatReader(Reader):
         line = line.strip()
 
         # Speed.#1.........:    17848 H/s (10.31ms) @ Accel:256 Loops:256 Thr:1 Vec:8
-        match = re.search(r"Speed.+:\s+(.+)\(", line, flags=re.IGNORECASE)
+        match = re.search(r"Speed.+:\s+(.+) \(", line, flags=re.IGNORECASE)
         if match:
             speed = match.group(1)
 
@@ -158,7 +157,15 @@ class Hashcat(Runner):
     def get_key_if_found(self) -> str | None:
         return self._reader.get_key_if_found()
 
-    @staticmethod
-    def is_capture_file_ok(path: Path) -> bool:
-        with Hashcat(path, wordlist_file_path=FAKE_WORDLIST_FILE_PATH) as crack:
-            return crack.wait() == 0
+    def get_exit_info(self) -> CrackExitInfo | None:
+        returncode = self.poll()
+        if returncode is None:
+            return None
+
+        not_error_codes = [
+            0, # Cracked
+            1, # Exhausted
+        ]
+
+        return CrackExitInfo(is_error=(returncode not in not_error_codes),
+                             returncode=returncode)

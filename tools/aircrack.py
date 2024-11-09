@@ -3,7 +3,7 @@ from pathlib import Path
 import re
 import threading
 
-from tools.crack_info import CrackProgressInfo
+from tools.crack_info import CrackProgressInfo, CrackExitInfo
 from utils.runner import Reader, Runner
 from wordlists.paths import FAKE_WORDLIST_FILE_PATH
 
@@ -128,6 +128,14 @@ class Aircrack(Runner):
 
     def get_key_if_found(self) -> str | None:
         return self._reader.get_key_if_found()
+
+    def get_exit_info(self) -> CrackExitInfo | None:
+        returncode = self.poll()
+        if returncode is None:
+            return None
+
+        return CrackExitInfo(is_error=(returncode != 0),
+                             returncode=returncode)
 
     @staticmethod
     def is_capture_file_ok(path: Path) -> bool:

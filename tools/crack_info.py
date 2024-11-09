@@ -8,3 +8,10 @@ class CrackProgressInfo:
     speed: str | None
     percentage: str | None
     last_passphrase: str | None
+
+
+@dataclasses.dataclass
+class CrackExitInfo:
+    """First check `is_error`. Not every non-zero `retuncode` means failure. It depends on a tool."""
+    is_error: bool
+    returncode: int

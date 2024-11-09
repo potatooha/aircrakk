@@ -295,17 +295,17 @@ def _crack(tool_cls,
                 print(f"\x1b[2KFound key: '{key}'!") # FIXME
                 return key
 
-            result = tool.poll()
-            if result is not None:
-                if result != 0:
-                    print(f"\x1b[2KFailed to crack: {result}") # FIXME
+            exit_info = tool.get_exit_info()
+            if exit_info is not None:
+                if exit_info.is_error:
+                    print(f"\x1b[2KFailed to crack: {exit_info.returncode}") # FIXME
                 else:
                     print("\x1b[2KKey is not found", end='\r', flush=True) # FIXME
                 return None
 
             info = tool.get_progress_info()
             if not info.last_passphrase:
-                time.sleep(1)
+                time.sleep(0.5)
                 continue
 
             line = f"\x1b[2KLast passphase: '{info.last_passphrase}'"
