@@ -10,6 +10,10 @@ import sys
 import tempfile
 import time
 
+from config.crack_tool import CrackTool
+from config.progress import Progress
+from config.statistics import Statistics
+from config.tasks import TaskKind, TaskInfo, load_tasks, WordlistInfo, MaskInfo, create_tasks
 from tools.aircrack import Aircrack
 from tools.aireplay import fakeauth, deauth
 from tools.airmon import monitoring_session
@@ -184,7 +188,7 @@ WORDLIST_GLOB_PATTERNS = [
 ]
 
 
-def _scan_worldlists(wordlists: list[Path], wordlist_dirs: list[Path]) -> dict[Path, int]:
+def _scan_worldlists(wordlists: list[Path], wordlist_dirs: list[Path]) -> dict[Path, WordlistInfo]:
     wordlists = dict.fromkeys(wordlists)
 
     for dir in wordlist_dirs:
@@ -199,16 +203,16 @@ def _scan_worldlists(wordlists: list[Path], wordlist_dirs: list[Path]) -> dict[P
 
     for wordlist in wordlists.keys():
         file_size = wordlist.stat().st_size
-        wordlists[wordlist] = file_size
+        wordlists[wordlist] = WordlistInfo(file_size)
 
     return wordlists
 
 
-def _filter_wordlists(wordlists: dict[Path, int]) -> dict[Path, int]:
+def _filter_wordlists(wordlists: dict[Path, int]) -> dict[Path, WordlistInfo]:
     filtered_wordlists = {}
 
-    for wordlist, file_size in wordlists.items():
-        if file_size == 0:
+    for wordlist, info in wordlists.items():
+        if info.file_size == 0:
             print(f"Skipped empty wordlist {wordlist}")
             continue
 
@@ -216,44 +220,19 @@ def _filter_wordlists(wordlists: dict[Path, int]) -> dict[Path, int]:
             print(f"Skipped binary file {wordlist}")
             continue
 
-        filtered_wordlists[wordlist] = file_size
+        filtered_wordlists[wordlist] = info
 
     return filtered_wordlists
 
 
-def _sort_wordlists(wordlists: dict[Path, int]) -> dict[Path, int]:
-    sorted_wordlists = {}
-
-    sorted_keys = sorted(wordlists.keys(), key=lambda key: wordlists[key], reverse=True)
-    for key in sorted_keys:
-        sorted_wordlists[key] = wordlists[key]
-
-    return sorted_wordlists
-
-
-class TaskKind(enum.StrEnum):
-    MASK = 'mask'
-    WORDLIST = 'wordlist'
-
-    def serialize(self, attrs: str | None = None) -> str:
-        text = self.value
-
-        if attrs:
-            text += ' ' + attrs
-
-        return text
-
-    @staticmethod
-    def deserialize(text: str) -> tuple[TaskKind, str | None]:
-        tokens = text.split(maxsplit=1)
-        kind = tokens[0]
-        attrs = tokens[1] if len(tokens) > 1 else None
-        return TaskKind(kind), attrs
+def _sort_wordlists(wordlists: dict[Path, WordlistInfo]) -> dict[Path, WordlistInfo]:
+    sorted_keys = sorted(wordlists.keys(), key=lambda key: wordlists[key].file_size, reverse=True)
+    return {key: wordlists[key] for key in sorted_keys}
 
 
 def create_tasks_config_file(wordlists: list[Path],
                              wordlist_dirs: list[Path],
-                             masks: list[str],
+                             cli_masks: list[str],
                              output: Path):
     if len(wordlist_dirs) > 0:
         print("Please wait...")
@@ -264,86 +243,30 @@ def create_tasks_config_file(wordlists: list[Path],
 
     print(f"{len(wordlists)} potential worldlist(s) found (you may need to clean wordlists manually)")
 
-    tasks = {}
-    for mask in masks:
-        tokens = mask.split(',')
+    masks = {}
+    for cli_mask in cli_masks:
+        tokens = cli_mask.split(',')
+
         mask = tokens[0]
         extra_args = tokens[1:]
 
-        attrs = ' '.join(extra_args) if len(extra_args) > 0 else None
-        tasks[mask] = TaskKind.MASK.serialize(attrs)
+        masks[mask] = MaskInfo(extra_args)
 
-    print(f"{len(masks)} mask(s) added")
+    print(f"{len(masks)} mask(s) provided")
 
-    for wordlist, file_size in wordlists.items():
-        tasks[str(wordlist)] = TaskKind.WORDLIST.serialize(f"({file_size} bytes)")
-
-    with output.open("w") as file:
-        json.dump(tasks, file, indent=4)
+    create_tasks(output, wordlists, masks)
 
 
 """
     Cracking
 """
 
-@dataclasses.dataclass
-class TaskInfo:
-    kind: TaskKind
-    extra_args: list[str]
-    usage: int
-
-    @staticmethod
-    def deserialize(text: str) -> TaskInfo:
-        kind, attrs = TaskKind.deserialize(text)
-
-        extra_args = []
-        if kind == TaskKind.MASK and attrs:
-            extra_args = attrs.split()
-
-        return TaskInfo(kind, extra_args, usage=0)
-
-
-def _get_tasks_from_config(path: Path) -> dict[str, TaskInfo]:
-    with path.open("r") as file:
-        raw_tasks = json.load(file)
-
-    return {key: TaskInfo.deserialize(value) for key, value in raw_tasks.items()}
-
-
-def _update_task_usage_statistics(path: Path, tasks: dict[str, TaskInfo]):
-    if not path.exists():
-        return
-
-    with path.open("r") as file:
-        tasks_usage_table = json.load(file)
-
-    for task, usage in tasks_usage_table.items():
-        if task not in tasks:
-            # The statistics file, unlike the config file, isn't supposed to be edited manually (but
-            # it's possible), so it can have wordlists or masks that are no longer in the config file
-            print(f"Ignore not known task {task} from {path}")
-            continue
-
-        tasks[task].usage = usage
-
-
-def _store_task_usage_statistics(path: Path, tasks: dict[str, TaskInfo]):
-    tasks_usage_table = {key: value.usage for key, value in tasks.items()}
-
-    with path.open("w") as file:
-        json.dump(tasks_usage_table, file, indent=4)
-
-
-def _crack(tool_cls,
-           capture_file_path: Path,
-           *,
-           wordlist_file_path: Path | None,
-           mask: str | None,
-           extra_args: list[str]) -> str | None:
-    what = str(wordlist_file_path or mask)
-    what = what + (' ' + ' '.join(extra_args) if len(extra_args) > 0 else '')
-    print(f"Trying to crack {str(capture_file_path)} by '{what}'...")
-
+def _crack_one(tool_cls,
+               capture_file_path: Path,
+               *,
+               wordlist_file_path: Path | None,
+               mask: str | None,
+               extra_args: list[str]) -> str | None:
     with tool_cls(capture_file_path,
                   wordlist_file_path=wordlist_file_path,
                   mask=mask,
@@ -351,7 +274,6 @@ def _crack(tool_cls,
         while True:
             key = tool.get_key_if_found()
             if key:
-                print(f"\x1b[2KFound key: '{key}'!") # FIXME
                 return key
 
             exit_info = tool.get_exit_info()
@@ -381,48 +303,84 @@ def _crack(tool_cls,
             time.sleep(1)
 
 
-def crack(aircrack_capture_file_path: Path,
-          tasks_config_file_path: Path,
-          statistics_file_path: Path,
-          prefer_aircrack: bool):
-    tasks = _get_tasks_from_config(tasks_config_file_path)
-    _update_task_usage_statistics(statistics_file_path, tasks)
-
-    has_masks = any(info.kind == TaskKind.MASK for info in tasks.values())
-
-    # `aircrack-ng` only works with wordlists
-    if not prefer_aircrack or has_masks:
-        hashcat_capture_file_path = aircrack_capture_file_path.with_suffix(".hccapx")
-        convert_aircrack_capture_to_hashcat_format(aircrack_capture_file_path, hashcat_capture_file_path)
-
-    key = None
+def _crack(aircrack_capture_file_path: Path,
+           hashcat_capture_file_path: Path | None,
+           tasks: dict[str, TaskInfo],
+           statistics: Statistics,
+           progress: Progress,
+           prefer_aircrack: bool) -> str | None:
+    key = progress.get_key_if_found()
+    if key:
+        return key
 
     for task, info in tasks.items():
+        session_file_path = progress.get_session_if_in_progress(task) # TODO
+
+        if progress.is_finished(task):
+            print(f"\x1b[2KSkipping exhausted '{task}'") # FIXME
+            continue
+
         if prefer_aircrack and info.kind == TaskKind.WORDLIST:
+            tool = CrackTool.AIRCRACK
             tool_cls = Aircrack
             capture_file_path = aircrack_capture_file_path
 
         else:
+            tool = CrackTool.HASHCAT
             tool_cls = Hashcat
             capture_file_path = hashcat_capture_file_path
+
+        progress.start(task, tool, session_file_path)
 
         wordlist_file_path = Path(task) if info.kind == TaskKind.WORDLIST else None
         mask = task if info.kind == TaskKind.MASK else None
 
-        key = _crack(tool_cls,
-                     capture_file_path,
-                     wordlist_file_path=wordlist_file_path,
-                     mask=mask,
-                     extra_args=info.extra_args)
+        what = task + (' ' + ' '.join(info.extra_args) if len(info.extra_args) > 0 else '')
+        print(f"\x1b[2KTrying to crack {str(capture_file_path)} by '{what}'...") # FIXME
+
+        key = _crack_one(tool_cls,
+                         capture_file_path,
+                         wordlist_file_path=wordlist_file_path,
+                         mask=mask,
+                         extra_args=info.extra_args)
         if key:
-            usage = usage + 1
-            tasks[task] = usage
-            break
+            progress.finish_with_key(task, key)
+            statistics.increment(task)
+        else:
+            progress.finish_exhausted(task)
 
-    if not key:
-        print("Key is not found")
 
-    _store_task_usage_statistics(statistics_file_path, tasks)
+def crack(aircrack_capture_file_path: Path,
+          tasks_config_file_path: Path,
+          statistics_file_path: Path,
+          progress_file_path: Path | None,
+          prefer_aircrack: bool):
+    tasks = load_tasks(tasks_config_file_path)
+    has_masks = any(info.kind == TaskKind.MASK for info in tasks.values())
+
+    # `aircrack-ng` only works with wordlists
+    hashcat_capture_file_path = None
+    if not prefer_aircrack or has_masks:
+        hashcat_capture_file_path = aircrack_capture_file_path.with_suffix(".hccapx")
+        convert_aircrack_capture_to_hashcat_format(aircrack_capture_file_path, hashcat_capture_file_path)
+
+    progress_file_path = progress_file_path or aircrack_capture_file_path.with_suffix(".progress.json")
+
+    with (
+        Statistics(statistics_file_path) as statistics,
+        Progress(progress_file_path) as progress,
+    ):
+        key = _crack(aircrack_capture_file_path,
+                     hashcat_capture_file_path,
+                     tasks,
+                     statistics,
+                     progress,
+                     prefer_aircrack)
+        if key:
+            print(f"\x1b[2KFound key: '{key}'!") # FIXME
+            return
+
+    print("\x1b[2KKey is not found") # FIXME
 
 
 """
@@ -442,7 +400,7 @@ def on_tasks(args: argparse.Namespace):
 
 
 def on_crack(args: argparse.Namespace):
-    crack(args.capture, args.tasks, args.statistics, args.prefer_aircrack)
+    crack(args.capture, args.tasks, args.statistics, args.progress, args.prefer_aircrack)
 
 
 def main():
@@ -471,7 +429,7 @@ def main():
     handshake_parser.add_argument("iface",
                                   help="Wireless iface for monitoring")
     handshake_parser.add_argument("strategy",
-                                  help="Strategy for `aireplay-ng`") # FIXME
+                                  help="Strategy for `aireplay-ng`") # FIXME (enum)
     handshake_parser.add_argument("--channel",
                                   help="Channel of an access point",
                                   type=int,
@@ -520,6 +478,9 @@ def main():
                               help="Task statistics file (will create a new one if it not exists)",
                               type=Path,
                               required=True)
+    crack_parser.add_argument("--progress",
+                              help="Task progress file (will create a new one if it not exists)",
+                              type=Path)
     crack_parser.add_argument("--prefer_aircrack",
                               action='store_true')
     crack_parser.set_defaults(handler=on_crack)
