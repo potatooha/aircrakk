@@ -121,7 +121,8 @@ class Hashcat(Runner):
                  capture_file_path: Path,
                  *,
                  wordlist_file_path: Path | None = None,
-                 mask: str | None = None):
+                 mask: str | None = None,
+                 extra_args: list[str] = []):
         self._reader = _HashcatReader()
         self._writer = _HashcatWriter()
 
@@ -148,6 +149,9 @@ class Hashcat(Runner):
                 "-a", "3",
                 mask,
             ])
+
+        if extra_args:
+            args.extend(extra_args)
 
         super().__init__(args, self._reader, self._writer)
 

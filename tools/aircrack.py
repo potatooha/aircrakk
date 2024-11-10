@@ -112,7 +112,8 @@ class Aircrack(Runner):
     def __init__(self,
                  capture_file_path: Path,
                  *,
-                 wordlist_file_path: Path):
+                 wordlist_file_path: Path,
+                 **kwargs):
         self._reader = _AircrackReader()
 
         args = [

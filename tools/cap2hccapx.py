@@ -14,6 +14,7 @@ def _run(args: list[str]):
 
     if result.returncode:
         print(result.stdout.decode())
+        print(result.stderr.decode())
         raise RuntimeError(f"{args} failed: {result.returncode}")
 
 

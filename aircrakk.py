@@ -1,5 +1,7 @@
 from __future__ import annotations
 import argparse
+import dataclasses
+import enum
 import json
 import os
 from pathlib import Path
@@ -171,7 +173,7 @@ def handshake(iface: str,
 
 
 """
-    Creating a wordlist config file
+    Creating a tasks config file
 """
 
 WORDLIST_GLOB_PATTERNS = [
@@ -182,10 +184,10 @@ WORDLIST_GLOB_PATTERNS = [
 ]
 
 
-def _scan_worldlists(wordlists: list[Path], scan_dirs: list[Path]) -> dict[Path, int]:
+def _scan_worldlists(wordlists: list[Path], wordlist_dirs: list[Path]) -> dict[Path, int]:
     wordlists = dict.fromkeys(wordlists)
 
-    for dir in scan_dirs:
+    for dir in wordlist_dirs:
         for pattern in WORDLIST_GLOB_PATTERNS:
             for wordlist in dir.rglob(pattern, case_sensitive=False):
                 wordlist = Path(wordlist)
@@ -229,66 +231,123 @@ def _sort_wordlists(wordlists: dict[Path, int]) -> dict[Path, int]:
     return sorted_wordlists
 
 
-def _unpath_wordlists(wordlists: dict[Path, int]) -> dict[str, int]:
-    return {str(key): value for key, value in wordlists.items()}
+class TaskKind(enum.StrEnum):
+    MASK = 'mask'
+    WORDLIST = 'wordlist'
+
+    def serialize(self, attrs: str | None = None) -> str:
+        text = self.value
+
+        if attrs:
+            text += ' ' + attrs
+
+        return text
+
+    @staticmethod
+    def deserialize(text: str) -> tuple[TaskKind, str | None]:
+        tokens = text.split(maxsplit=1)
+        kind = tokens[0]
+        attrs = tokens[1] if len(tokens) > 1 else None
+        return TaskKind(kind), attrs
 
 
-def create_wordlist_config_file(wordlists: list[Path], scan_dirs: list[Path], output: Path):
-    if len(scan_dirs) > 0:
+def create_tasks_config_file(wordlists: list[Path],
+                             wordlist_dirs: list[Path],
+                             masks: list[str],
+                             output: Path):
+    if len(wordlist_dirs) > 0:
         print("Please wait...")
 
-    wordlists = _scan_worldlists(wordlists, scan_dirs)
+    wordlists = _scan_worldlists(wordlists, wordlist_dirs)
     wordlists = _filter_wordlists(wordlists)
     wordlists = _sort_wordlists(wordlists)
-    wordlists = _unpath_wordlists(wordlists)
 
-    print(f"{len(wordlists)} potential worldlists found")
+    print(f"{len(wordlists)} potential worldlist(s) found (you may need to clean wordlists manually)")
+
+    tasks = {}
+    for mask in masks:
+        tokens = mask.split(',')
+        mask = tokens[0]
+        extra_args = tokens[1:]
+
+        attrs = ' '.join(extra_args) if len(extra_args) > 0 else None
+        tasks[mask] = TaskKind.MASK.serialize(attrs)
+
+    print(f"{len(masks)} mask(s) added")
+
+    for wordlist, file_size in wordlists.items():
+        tasks[str(wordlist)] = TaskKind.WORDLIST.serialize(f"({file_size} bytes)")
 
     with output.open("w") as file:
-        json.dump(wordlists, file, indent=4)
+        json.dump(tasks, file, indent=4)
 
 
 """
     Cracking
 """
 
-def _get_wordlists_from_config(path: Path) -> dict[str, int]:
+@dataclasses.dataclass
+class TaskInfo:
+    kind: TaskKind
+    extra_args: list[str]
+    usage: int
+
+    @staticmethod
+    def deserialize(text: str) -> TaskInfo:
+        kind, attrs = TaskKind.deserialize(text)
+
+        extra_args = []
+        if kind == TaskKind.MASK and attrs:
+            extra_args = attrs.split()
+
+        return TaskInfo(kind, extra_args, usage=0)
+
+
+def _get_tasks_from_config(path: Path) -> dict[str, TaskInfo]:
     with path.open("r") as file:
-        wordlist_size_table = json.load(file)
+        raw_tasks = json.load(file)
 
-    wordlist_usage_table = {key: 0 for key in wordlist_size_table.keys()}
-    return wordlist_usage_table
+    return {key: TaskInfo.deserialize(value) for key, value in raw_tasks.items()}
 
 
-def _update_wordlist_usage_statistics(path: Path, wordlists: dict[str, int]):
+def _update_task_usage_statistics(path: Path, tasks: dict[str, TaskInfo]):
     if not path.exists():
         return
 
     with path.open("r") as file:
-        wordlist_usage_table = json.load(file)
+        tasks_usage_table = json.load(file)
 
-    for wordlist, usage in wordlist_usage_table.items():
-        if wordlist not in wordlists:
+    for task, usage in tasks_usage_table.items():
+        if task not in tasks:
             # The statistics file, unlike the config file, isn't supposed to be edited manually (but
-            # it's possible), so it can have wordlists that are no longer in the config file
-            print(f"Ignore not known wordlist {wordlist} from {path}")
+            # it's possible), so it can have wordlists or masks that are no longer in the config file
+            print(f"Ignore not known task {task} from {path}")
             continue
 
-        wordlists[wordlist] = usage
+        tasks[task].usage = usage
 
 
-def _store_wordlist_usage_statistics(path: Path, wordlists: dict[str, int]):
+def _store_task_usage_statistics(path: Path, tasks: dict[str, TaskInfo]):
+    tasks_usage_table = {key: value.usage for key, value in tasks.items()}
+
     with path.open("w") as file:
-        json.dump(wordlists, file, indent=4)
+        json.dump(tasks_usage_table, file, indent=4)
 
 
 def _crack(tool_cls,
            capture_file_path: Path,
-           wordlist_file_path: Path) -> str | None:
-    print(f"Trying to crack {str(capture_file_path)} by {str(wordlist_file_path)}...")
+           *,
+           wordlist_file_path: Path | None,
+           mask: str | None,
+           extra_args: list[str]) -> str | None:
+    what = str(wordlist_file_path or mask)
+    what = what + (' '.join(extra_args) if len(extra_args) > 0 else '')
+    print(f"Trying to crack {str(capture_file_path)} by '{what}'...")
 
     with tool_cls(capture_file_path,
-              wordlist_file_path=wordlist_file_path) as tool:
+                  wordlist_file_path=wordlist_file_path,
+                  mask=mask,
+                  extra_args=extra_args) as tool:
         while True:
             key = tool.get_key_if_found()
             if key:
@@ -322,35 +381,48 @@ def _crack(tool_cls,
             time.sleep(1)
 
 
-def crack(capture_file_path: Path,
-          wordlists_config_file_path: Path,
+def crack(aircrack_capture_file_path: Path,
+          tasks_config_file_path: Path,
           statistics_file_path: Path,
           prefer_aircrack: bool):
-    wordlists = _get_wordlists_from_config(wordlists_config_file_path)
-    _update_wordlist_usage_statistics(statistics_file_path, wordlists)
+    tasks = _get_tasks_from_config(tasks_config_file_path)
+    _update_task_usage_statistics(statistics_file_path, tasks)
+
+    has_masks = any(info.kind == TaskKind.MASK for info in tasks.values())
+
+    # `aircrack-ng` only works with wordlists
+    if not prefer_aircrack or has_masks:
+        hashcat_capture_file_path = aircrack_capture_file_path.with_suffix(".hccapx")
+        convert_aircrack_capture_to_hashcat_format(aircrack_capture_file_path, hashcat_capture_file_path)
 
     key = None
 
-    if prefer_aircrack:
-        tool_cls = Aircrack
+    for task, info in tasks.items():
+        if prefer_aircrack and info.kind == TaskKind.WORDLIST:
+            tool_cls = Aircrack
+            capture_file_path = aircrack_capture_file_path
 
-    else:
-        tool_cls = Hashcat
+        else:
+            tool_cls = Hashcat
+            capture_file_path = hashcat_capture_file_path
 
-        hashcat_capture_file_path = capture_file_path.with_suffix(".hccapx")
-        capture_file_path = convert_aircrack_capture_to_hashcat_format(capture_file_path, hashcat_capture_file_path)
+        wordlist_file_path = Path(task) if info.kind == TaskKind.WORDLIST else None
+        mask = task if info.kind == TaskKind.MASK else None
 
-    for wordlist, usage in wordlists.items():
-        key = _crack(tool_cls, capture_file_path, Path(wordlist))
+        key = _crack(tool_cls,
+                     capture_file_path,
+                     wordlist_file_path=wordlist_file_path,
+                     mask=mask,
+                     extra_args=info.extra_args)
         if key:
             usage = usage + 1
-            wordlists[wordlist] = usage
+            tasks[task] = usage
             break
 
     if not key:
         print("Key is not found")
 
-    _store_wordlist_usage_statistics(statistics_file_path, wordlists)
+    _store_task_usage_statistics(statistics_file_path, tasks)
 
 
 """
@@ -365,12 +437,12 @@ def on_handshake(args: argparse.Namespace):
     handshake(args.iface, args.strategy, args.channel, args.bssid, args.output_dir)
 
 
-def on_wordlists(args: argparse.Namespace):
-    create_wordlist_config_file(args.wordlist, args.scan_dir, args.output)
+def on_tasks(args: argparse.Namespace):
+    create_tasks_config_file(args.wordlist, args.wordlist_dir, args.mask, args.output)
 
 
 def on_crack(args: argparse.Namespace):
-    crack(args.capture, args.wordlists, args.statistics, args.prefer_aircrack)
+    crack(args.capture, args.tasks, args.statistics, args.prefer_aircrack)
 
 
 def main():
@@ -413,22 +485,26 @@ def main():
                                   required=True)
     handshake_parser.set_defaults(handler=on_handshake)
 
-    wordlists_parser = subparsers.add_parser("wordlists")
-    wordlists_parser.add_argument("--wordlist",
-                                  help="Wordlist to add",
-                                  type=Path,
-                                  action='append',
-                                  default=[])
-    wordlists_parser.add_argument("--scan_dir",
-                                  help="Directory to scan for wordlists",
-                                  type=Path,
-                                  action='append',
-                                  default=[])
-    wordlists_parser.add_argument("--output",
-                                  help="Config file to create",
-                                  type=Path,
-                                  required=True)
-    wordlists_parser.set_defaults(handler=on_wordlists)
+    tasks_parser = subparsers.add_parser("tasks")
+    tasks_parser.add_argument("--wordlist",
+                              help="Wordlist to add",
+                              type=Path,
+                              action='append',
+                              default=[])
+    tasks_parser.add_argument("--wordlist_dir",
+                              help="Directory to scan for wordlists",
+                              type=Path,
+                              action='append',
+                              default=[])
+    tasks_parser.add_argument("--mask",
+                              help="Brute-force attack mask",
+                              action='append',
+                              default=[])
+    tasks_parser.add_argument("--output",
+                              help="Config file to create",
+                              type=Path,
+                              required=True)
+    tasks_parser.set_defaults(handler=on_tasks)
 
     crack_parser = subparsers.add_parser("crack",
                                          help="Crack an access point using a captured handshake")
@@ -436,12 +512,12 @@ def main():
                               help="Input .cap file",
                               type=Path,
                               required=True)
-    crack_parser.add_argument("--wordlists",
-                              help="Wordlist config file (created by `wordlists` command)",
+    crack_parser.add_argument("--tasks",
+                              help="Tasks config file (created by `tasks` command)",
                               type=Path,
                               required=True)
     crack_parser.add_argument("--statistics",
-                              help="Wordlist statistics file (will create a new one if it not exists)",
+                              help="Task statistics file (will create a new one if it not exists)",
                               type=Path,
                               required=True)
     crack_parser.add_argument("--prefer_aircrack",
