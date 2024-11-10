@@ -140,5 +140,5 @@ class Aircrack(Runner):
 
     @staticmethod
     def is_capture_file_ok(path: Path) -> bool:
-        with Aircrack(path, FAKE_WORDLIST_FILE_PATH) as crack:
+        with Aircrack(path, wordlist_file_path=FAKE_WORDLIST_FILE_PATH) as crack:
             return crack.wait() == 0

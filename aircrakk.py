@@ -341,7 +341,7 @@ def _crack(tool_cls,
            mask: str | None,
            extra_args: list[str]) -> str | None:
     what = str(wordlist_file_path or mask)
-    what = what + (' '.join(extra_args) if len(extra_args) > 0 else '')
+    what = what + (' ' + ' '.join(extra_args) if len(extra_args) > 0 else '')
     print(f"Trying to crack {str(capture_file_path)} by '{what}'...")
 
     with tool_cls(capture_file_path,
