@@ -10,6 +10,7 @@ from config.crack_tool import CrackTool
 class TaskStatus(enum.StrEnum):
     NOT_STARTED = 'not_started'
     IN_PROGRESS = 'in_progress'
+    FAILED = 'failed'
     EXHAUSTED = 'exhausted'
     CRACKED = 'cracked'
 
@@ -31,7 +32,7 @@ def load_progress(path: Path) -> dict[str, TaskStatusInfo]:
     with path.open('r') as file:
         raw_progress = json.load(file)
 
-    for task, fields in raw_progress.items():   
+    for task, fields in raw_progress.items():
         status = TaskStatus(fields['status'])
         tool = CrackTool(tool) if (tool := fields.get('tool', None)) else None
         session_file_path = Path(session) if (session := fields.get('session_file_path', None)) else None
@@ -54,7 +55,7 @@ def store_progress(path: Path, progress: dict[str, TaskStatusInfo]):
             fields['tool'] = info.tool
 
         if info.session_file_path:
-            fields['session_file_path'] = info.session_file_path
+            fields['session_file_path'] = str(info.session_file_path)
 
         if info.found_key:
             fields['found_key'] = info.found_key
@@ -83,7 +84,9 @@ class Progress:
 
         return self._progress[task].status in [TaskStatus.EXHAUSTED, TaskStatus.CRACKED]
 
-    def get_session_if_in_progress(self, task: str) -> Path | None:
+    def get_session_if_in_progress(self,
+                                   task: str,
+                                   tool: CrackTool) -> Path | None:
         if task not in self._progress:
             return None
 
@@ -91,7 +94,13 @@ class Progress:
         if info.status != TaskStatus.IN_PROGRESS:
             return None
 
+        if info.tool != tool:
+            return None
+
         if not info.session_file_path or not info.session_file_path.is_file():
+            return None
+
+        if not info.session_file_path.stat().st_size:
             return None
 
         return info.session_file_path
@@ -105,30 +114,27 @@ class Progress:
         self._progress[task] = info
         self.flush()
 
-    def finish_with_key(self, task: str, key: str):
+    def _finish(self, task: str, status: TaskStatus, key: str | None = None):
         info = self._progress[task]
         assert info.status == TaskStatus.IN_PROGRESS
         assert info.tool
         assert not info.found_key
 
-        info.status = TaskStatus.CRACKED
+        info.status = status
         info.session_file_path = None
         info.found_key = key
 
         self._progress[task] = info
         self.flush()
 
+    def finish_failed(self, task: str):
+        self._finish(task, TaskStatus.FAILED)
+
     def finish_exhausted(self, task: str):
-        info = self._progress[task]
-        assert info.status == TaskStatus.IN_PROGRESS
-        assert info.tool
-        assert not info.found_key
+        self._finish(task, TaskStatus.EXHAUSTED)
 
-        info.status = TaskStatus.EXHAUSTED
-        info.session_file_path = None
-
-        self._progress[task] = info
-        self.flush()
+    def finish_with_key(self, task: str, key: str):
+        self._finish(task, TaskStatus.CRACKED, key)
 
     def flush(self):
         store_progress(self._path, self._progress)

@@ -19,6 +19,7 @@ from tools.aireplay import fakeauth, deauth
 from tools.airmon import monitoring_session
 from tools.airodump import AccessPoint, Station, Dump
 from tools.cap2hccapx import convert_aircrack_capture_to_hashcat_format
+from tools.crack_info import CrackSessionMode, CrackSession
 from tools.file import is_text_file
 from tools.hashcat import Hashcat
 from utils.dumping import get_table, get_dataclass_getter
@@ -261,20 +262,36 @@ def create_tasks_config_file(wordlists: list[Path],
     Cracking
 """
 
+@dataclasses.dataclass
+class CrackResult:
+    key: str | None
+    is_failed: bool
+
+    @staticmethod
+    def from_found_key(key: str) -> CrackResult:
+        return CrackResult(key=key, is_failed=False)
+
+    @staticmethod
+    def from_failed_or_exhausted(*, is_failed: bool) -> CrackResult:
+        return CrackResult(key=None, is_failed=is_failed)
+
+
 def _crack_one(tool_cls,
                capture_file_path: Path,
                *,
                wordlist_file_path: Path | None,
                mask: str | None,
-               extra_args: list[str]) -> str | None:
+               extra_args: list[str],
+               session: CrackSession) -> CrackResult:
     with tool_cls(capture_file_path,
                   wordlist_file_path=wordlist_file_path,
                   mask=mask,
-                  extra_args=extra_args) as tool:
+                  extra_args=extra_args,
+                  session=session) as tool:
         while True:
             key = tool.get_key_if_found()
             if key:
-                return key
+                return CrackResult.from_found_key(key)
 
             exit_info = tool.get_exit_info()
             if exit_info is not None:
@@ -282,7 +299,7 @@ def _crack_one(tool_cls,
                     print(f"\x1b[2KFailed to crack: {exit_info.returncode}") # FIXME
                 else:
                     print("\x1b[2KKey is not found", end='\r', flush=True) # FIXME
-                return None
+                return CrackResult.from_failed_or_exhausted(is_failed=exit_info.is_error)
 
             info = tool.get_progress_info()
             if not info.last_passphrase:
@@ -314,8 +331,6 @@ def _crack(aircrack_capture_file_path: Path,
         return key
 
     for task, info in tasks.items():
-        session_file_path = progress.get_session_if_in_progress(task) # TODO
-
         if progress.is_finished(task):
             print(f"\x1b[2KSkipping exhausted '{task}'") # FIXME
             continue
@@ -330,22 +345,47 @@ def _crack(aircrack_capture_file_path: Path,
             tool_cls = Hashcat
             capture_file_path = hashcat_capture_file_path
 
-        progress.start(task, tool, session_file_path)
+        if (session_file_path := progress.get_session_if_in_progress(task, tool)):
+            session = CrackSession(session_file_path, CrackSessionMode.RESTORE)
 
-        wordlist_file_path = Path(task) if info.kind == TaskKind.WORDLIST else None
-        mask = task if info.kind == TaskKind.MASK else None
+        else:
+            session_file_path = aircrack_capture_file_path.with_suffix(".session")
+            session_file_path.unlink(missing_ok=True)
+            session = CrackSession(session_file_path, CrackSessionMode.CREATE)
 
-        what = task + (' ' + ' '.join(info.extra_args) if len(info.extra_args) > 0 else '')
-        print(f"\x1b[2KTrying to crack {str(capture_file_path)} by '{what}'...") # FIXME
+        while True:
+            is_session_restoration = session.mode.should_restore()
 
-        key = _crack_one(tool_cls,
-                         capture_file_path,
-                         wordlist_file_path=wordlist_file_path,
-                         mask=mask,
-                         extra_args=info.extra_args)
-        if key:
-            progress.finish_with_key(task, key)
+            progress.start(task, tool, session_file_path)
+
+            wordlist_file_path = Path(task) if info.kind == TaskKind.WORDLIST else None
+            mask = task if info.kind == TaskKind.MASK else None
+
+            what = task + (' ' + ' '.join(info.extra_args) if len(info.extra_args) > 0 else '')
+            suffix = " (restore session)" if is_session_restoration else ""
+            print(f"\x1b[2KTrying to crack {str(capture_file_path)} by '{what}'{suffix}...") # FIXME
+
+            result = _crack_one(tool_cls,
+                                capture_file_path,
+                                wordlist_file_path=wordlist_file_path,
+                                mask=mask,
+                                extra_args=info.extra_args,
+                                session=session)
+
+            if is_session_restoration and not result.key and result.is_failed:
+                # Could not restore the previous session. Fallback to a new one
+                session.mode = CrackSessionMode.CREATE
+                continue
+
+            break
+
+        if result.key:
+            progress.finish_with_key(task, result.key)
             statistics.increment(task)
+
+        elif result.is_failed:
+            progress.finish_failed(task)
+
         else:
             progress.finish_exhausted(task)
 

@@ -3,7 +3,7 @@ from pathlib import Path
 import re
 import threading
 
-from tools.crack_info import CrackProgressInfo, CrackExitInfo
+from tools.crack_info import CrackProgressInfo, CrackExitInfo, CrackSession
 from utils.runner import Reader, Runner
 from wordlists.paths import FAKE_WORDLIST_FILE_PATH
 
@@ -113,14 +113,34 @@ class Aircrack(Runner):
                  capture_file_path: Path,
                  *,
                  wordlist_file_path: Path,
+                 mask: None = None,
+                 extra_args: list[str] = [],
+                 session: CrackSession | None = None,
                  **kwargs):
         self._reader = _AircrackReader()
 
         args = [
             AIRCRACK,
-            str(capture_file_path),
-            "-w", str(wordlist_file_path),
         ]
+
+        is_session_restoration = session and session.mode.should_restore()
+        if not is_session_restoration:
+            args.extend([
+                str(capture_file_path),
+                "-w", str(wordlist_file_path),
+            ])
+
+            if mask:
+                raise RuntimeError("Masks are not supported")
+
+            if extra_args:
+                args.extend(extra_args)
+
+        if session:
+            key = "-R" if session.mode.should_restore() else "-N"
+            args.extend([
+                key, str(session.path),
+            ])
 
         super().__init__(args, self._reader)
 

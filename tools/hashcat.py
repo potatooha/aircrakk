@@ -1,9 +1,10 @@
 from __future__ import annotations
+import enum
 from pathlib import Path
 import re
 import threading
 
-from tools.crack_info import CrackProgressInfo, CrackExitInfo
+from tools.crack_info import CrackProgressInfo, CrackExitInfo, CrackSession
 from utils.runner import Reader, Writer, Runner
 
 
@@ -116,42 +117,70 @@ class _HashcatWriter(Writer):
         return b"s"
 
 
+class HashcatWorkloadProfile(enum.Enum):
+    LOW = 1
+    DEFAULT = 2
+    HIGH = 3
+    NIGHTMARE = 4
+
+
 class Hashcat(Runner):
     def __init__(self,
                  capture_file_path: Path,
                  *,
                  wordlist_file_path: Path | None = None,
                  mask: str | None = None,
-                 extra_args: list[str] = []):
+                 extra_args: list[str] = [],
+                 session: CrackSession | None = None,
+                 **kwargs):
         self._reader = _HashcatReader()
         self._writer = _HashcatWriter()
 
         args = [
             HASHCAT,
-            "-m", "2500", "--deprecated-check-disable",
-            str(capture_file_path),
         ]
 
-        if (
-            (wordlist_file_path and mask) or
-            (not wordlist_file_path and not mask)
-        ):
-            raise RuntimeError("Provide wordlist or mask")
+        is_session_restoration = session and session.mode.should_restore()
+        if not is_session_restoration:
+            profile = kwargs.get('profile', HashcatWorkloadProfile.HIGH)
 
-        if wordlist_file_path:
             args.extend([
-                "-a", "0",
-                str(wordlist_file_path),
+                "-m", "2500", "--deprecated-check-disable", # WPA-EAPOL-PBKDF2
+                "-w", str(profile.value),
+                str(capture_file_path),
             ])
 
-        if mask:
+            if (
+                (wordlist_file_path and mask) or
+                (not wordlist_file_path and not mask)
+            ):
+                raise RuntimeError("Provide wordlist or mask")
+
+            if wordlist_file_path:
+                args.extend([
+                    "-a", "0",
+                    str(wordlist_file_path),
+                ])
+
+            if mask:
+                args.extend([
+                    "-a", "3",
+                    mask,
+                ])
+
+            if extra_args:
+                args.extend(extra_args)
+
+        if session:
             args.extend([
-                "-a", "3",
-                mask,
+                "--session", session.get_name_from_path(),
+                "--restore-file-path", str(session.path),
             ])
 
-        if extra_args:
-            args.extend(extra_args)
+            if session.mode.should_restore():
+                args.extend([
+                    "--restore",
+                ])
 
         super().__init__(args, self._reader, self._writer)
 
