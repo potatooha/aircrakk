@@ -2,8 +2,10 @@ from __future__ import annotations
 import enum
 from pathlib import Path
 import re
+import subprocess
 import threading
 
+from fakes.paths import FAKE_HASHCAT_CAPTURE_FILE_PATH, FAKE_WORDLIST_FILE_PATH
 from tools.crack_info import CrackProgressInfo, CrackExitInfo, CrackSession
 from utils.runner import Reader, Writer, Runner
 
@@ -202,3 +204,39 @@ class Hashcat(Runner):
 
         return CrackExitInfo(is_error=(returncode not in not_error_codes),
                              returncode=returncode)
+
+
+def _run(args: list[str]) -> str:
+    args = [HASHCAT] + args
+
+    result = subprocess.run(args, capture_output=True)
+
+    output = result.stdout.decode()
+    error = result.stderr.decode()
+
+    if result.returncode not in (0, 1):
+        print(output)
+        print(error)
+        raise RuntimeError(f"{args} failed: {result.returncode}")
+
+    return output
+
+
+def get_supported_password_lengths() -> tuple[int, int]:
+    output = _run([
+        "-m", "2500", "--deprecated-check-disable", # WPA-EAPOL-PBKDF2
+        str(FAKE_HASHCAT_CAPTURE_FILE_PATH),
+        "-a", "0", str(FAKE_WORDLIST_FILE_PATH),
+    ])
+
+    def get(what: str, output: str):
+        match = re.search(what + r" password length supported by kernel: (\d+)", output, flags=re.IGNORECASE)
+        if not match:
+            raise RuntimeError(f"Unexpected output: {output}")
+
+        return int(match.group(1))
+
+    min_length = get("Minimum", output)
+    max_length = get("Maximum", output)
+
+    return min_length, max_length

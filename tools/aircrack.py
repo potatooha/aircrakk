@@ -3,9 +3,9 @@ from pathlib import Path
 import re
 import threading
 
+from fakes.paths import FAKE_WORDLIST_FILE_PATH
 from tools.crack_info import CrackProgressInfo, CrackExitInfo, CrackSession
 from utils.runner import Reader, Runner
-from wordlists.paths import FAKE_WORDLIST_FILE_PATH
 
 
 AIRCRACK = 'aircrack-ng'

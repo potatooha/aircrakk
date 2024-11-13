@@ -1,10 +1,9 @@
 from __future__ import annotations
 import argparse
 import dataclasses
-import enum
-import json
 import os
 from pathlib import Path
+import re
 import shutil
 import sys
 import tempfile
@@ -21,7 +20,7 @@ from tools.airodump import AccessPoint, Station, Dump
 from tools.cap2hccapx import convert_aircrack_capture_to_hashcat_format
 from tools.crack_info import CrackSessionMode, CrackSession
 from tools.file import is_text_file
-from tools.hashcat import Hashcat
+from tools.hashcat import Hashcat, get_supported_password_lengths
 from utils.dumping import get_table, get_dataclass_getter
 
 
@@ -175,6 +174,52 @@ def handshake(iface: str,
             # This capture has a handshake, it can be stored to `output_dir`
             for path in temporary_dir.glob("*"):
                 shutil.copy(path, output_dir)
+
+
+"""
+    Splitting wordlists according to supported password lengths by kernel
+"""
+
+def _split_one(wordlist_file, hashcat_file, nohashcat_file, min_length: int, max_length: int):
+    for line in wordlist_file:
+        password = line.removesuffix(b'\n')
+        password = line.removesuffix(b'\r')
+
+        # $HEX[666f6f626172310d0a]
+        match = re.match(rb"\$HEX\[(\d+)]\s*", password)
+        if match:
+            length = len(match.group(1)) / 2
+
+        else:
+            length = len(password)
+
+        if length < min_length or length > max_length:
+            nohashcat_file.write(line)
+
+        else:
+            hashcat_file.write(line)
+
+
+def split_wordlists(wordlist_file_paths: list[Path]):
+    min_length, max_length = get_supported_password_lengths()
+    print(f"Supported password length by kernel: [{min_length}, {max_length}]")
+
+    for wordlist_file_path in wordlist_file_paths:
+        original_suffix = wordlist_file_path.suffix
+        hashcat_file_path = wordlist_file_path.with_suffix(".hashcat" + original_suffix)
+        nohashcat_file_path = wordlist_file_path.with_suffix(".nohashcat" + original_suffix)
+
+        with (
+            wordlist_file_path.open('rb') as wordlist_file,
+            hashcat_file_path.open('wb') as hashcat_file,
+            nohashcat_file_path.open('wb') as nohashcat_file,
+        ):
+            print(f"Splitting {str(wordlist_file_path)}...")
+            _split_one(wordlist_file,
+                       hashcat_file,
+                       nohashcat_file,
+                       min_length,
+                       max_length)
 
 
 """
@@ -435,6 +480,10 @@ def on_handshake(args: argparse.Namespace):
     handshake(args.iface, args.strategy, args.channel, args.bssid, args.output_dir)
 
 
+def on_splitter(args: argparse.Namespace):
+    split_wordlists(args.wordlist)
+
+
 def on_tasks(args: argparse.Namespace):
     create_tasks_config_file(args.wordlist, args.wordlist_dir, args.mask, args.output)
 
@@ -482,6 +531,14 @@ def main():
                                   type=Path,
                                   required=True)
     handshake_parser.set_defaults(handler=on_handshake)
+
+    splitter_parser = subparsers.add_parser("splitter")
+    splitter_parser.add_argument("--wordlist",
+                                 help="Wordlist to split",
+                                 type=Path,
+                                 action='append',
+                                 default=[])
+    splitter_parser.set_defaults(handler=on_splitter)
 
     tasks_parser = subparsers.add_parser("tasks")
     tasks_parser.add_argument("--wordlist",

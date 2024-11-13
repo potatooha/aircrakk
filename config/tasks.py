@@ -64,14 +64,12 @@ def create_tasks(path: Path,
         tasks[mask] = fields
 
     for wordlist, wordlist_info in wordlists.items():
-        file_size = str(wordlist_info.file_size)
-
         fields = {
             'kind': TaskKind.WORDLIST,
             'comment': f"{wordlist_info.file_size} bytes",
         }
 
-        tasks[str(wordlist)] = fields
+        tasks[str(wordlist.absolute())] = fields
 
     with path.open('w') as file:
         json.dump(tasks, file, indent=4)
