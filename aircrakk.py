@@ -380,7 +380,9 @@ def _crack(aircrack_capture_file_path: Path,
             print(f"\x1b[2KSkipping exhausted '{task}'") # FIXME
             continue
 
-        if prefer_aircrack and info.kind == TaskKind.WORDLIST:
+        preferred_tool = info.preferred_tool or (CrackTool.AIRCRACK if prefer_aircrack else CrackTool.HASHCAT)
+
+        if preferred_tool == CrackTool.AIRCRACK and info.kind == TaskKind.WORDLIST:
             tool = CrackTool.AIRCRACK
             tool_cls = Aircrack
             capture_file_path = aircrack_capture_file_path
@@ -408,7 +410,7 @@ def _crack(aircrack_capture_file_path: Path,
 
             what = task + (' ' + ' '.join(info.extra_args) if len(info.extra_args) > 0 else '')
             suffix = " (restore session)" if is_session_restoration else ""
-            print(f"\x1b[2KTrying to crack {str(capture_file_path)} by '{what}'{suffix}...") # FIXME
+            print(f"\x1b[2KTrying to crack {str(capture_file_path)} with '{what}' by {tool}{suffix}...") # FIXME
 
             result = _crack_one(tool_cls,
                                 capture_file_path,
