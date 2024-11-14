@@ -2,6 +2,7 @@ from __future__ import annotations
 import argparse
 import dataclasses
 import enum
+import hashlib
 import os
 from pathlib import Path
 import re
@@ -414,7 +415,12 @@ def _crack(aircrack_capture_file_path: Path,
             session = CrackSession(session_file_path, CrackSessionMode.RESTORE)
 
         else:
-            session_file_path = aircrack_capture_file_path.with_suffix(".session")
+            session_dir_name = aircrack_capture_file_path.with_suffix(".sessions").name
+            session_dir = aircrack_capture_file_path.parent / session_dir_name
+            session_dir.mkdir(parents=True, exist_ok=True)
+
+            session_file_name = hashlib.md5(task.encode()).hexdigest() + ".session"
+            session_file_path = session_dir / session_file_name
             session_file_path.unlink(missing_ok=True)
             session = CrackSession(session_file_path, CrackSessionMode.CREATE)
 
