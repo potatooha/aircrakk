@@ -1,6 +1,7 @@
 from __future__ import annotations
 import argparse
 import dataclasses
+import enum
 import os
 from pathlib import Path
 import re
@@ -21,6 +22,7 @@ from tools.cap2hccapx import convert_aircrack_capture_to_hashcat_format
 from tools.crack_info import CrackSessionMode, CrackSession
 from tools.file import is_text_file
 from tools.hashcat import Hashcat, get_supported_password_lengths
+from utils.ansi import printc
 from utils.dumping import get_table, get_dataclass_getter
 
 
@@ -118,8 +120,13 @@ def _is_handshake_accepted(dir: Path) -> bool:
     return Aircrack.is_capture_file_ok(path)
 
 
+class HandshakeAttack(enum.StrEnum):
+    DEAUTH = 'deauth'
+    FAKEAUTH = 'fakeauth'
+
+
 def _handshake(dump: Dump,
-               strategy: str,
+               attack: HandshakeAttack,
                bssid: str,
                output_dir: Path):
     while not dump.has_handshake() or not _is_handshake_accepted(output_dir):
@@ -130,10 +137,12 @@ def _handshake(dump: Dump,
         if bssid not in access_points:
             continue
 
-        if strategy == "fakeauth":
+        if attack == HandshakeAttack.FAKEAUTH:
             fakeauth(dump.monitoring_iface, bssid)
 
-        elif strategy == "deauth":
+        else:
+            assert attack == HandshakeAttack.DEAUTH
+
             if len(stations) == 0:
                 # Broadcast (not effective)
                 deauth(dump.monitoring_iface, bssid)
@@ -154,7 +163,7 @@ def _get_dump_output_dir(bssid: str, basic_output_dir: Path) -> Path:
 
 
 def handshake(iface: str,
-              strategy: str,
+              attack: HandshakeAttack,
               channel: int,
               bssid: str,
               basic_output_dir: Path):
@@ -167,7 +176,7 @@ def handshake(iface: str,
             dump_prefix = str(temporary_dir / "dump")
 
             with Dump(monitoring_iface, channel=channel, bssid=bssid, dump_prefix=dump_prefix) as dump:
-                _handshake(dump, strategy, bssid, temporary_dir)
+                _handshake(dump, attack, bssid, temporary_dir)
 
             print("Got a handshake!")
 
@@ -341,9 +350,9 @@ def _crack_one(tool_cls,
             exit_info = tool.get_exit_info()
             if exit_info is not None:
                 if exit_info.is_error:
-                    print(f"\x1b[2KFailed to crack: {exit_info.returncode}") # FIXME
+                    printc(f"Failed to crack: {exit_info.returncode}")
                 else:
-                    print("\x1b[2KKey is not found", end='\r', flush=True) # FIXME
+                    printc("Key is not found", end='\r', flush=True)
                 return CrackResult.from_failed_or_exhausted(is_failed=exit_info.is_error)
 
             info = tool.get_progress_info()
@@ -351,7 +360,7 @@ def _crack_one(tool_cls,
                 time.sleep(0.5)
                 continue
 
-            line = f"\x1b[2KLast passphase: '{info.last_passphrase}'"
+            line = f"Last passphase: '{info.last_passphrase}'"
 
             if info.speed:
                 line += ", speed: " + info.speed
@@ -361,7 +370,7 @@ def _crack_one(tool_cls,
 
             line += ", keep searching..."
 
-            print(line, end='\r', flush=True) # FIXME
+            printc(line, end='\r', flush=True)
             time.sleep(1)
 
 
@@ -377,7 +386,7 @@ def _crack(aircrack_capture_file_path: Path,
 
     for task, info in tasks.items():
         if progress.is_finished(task):
-            print(f"\x1b[2KSkipping exhausted '{task}'") # FIXME
+            printc(f"Skipping exhausted '{task}'")
             continue
 
         preferred_tool = info.preferred_tool or (CrackTool.AIRCRACK if prefer_aircrack else CrackTool.HASHCAT)
@@ -410,7 +419,7 @@ def _crack(aircrack_capture_file_path: Path,
 
             what = task + (' ' + ' '.join(info.extra_args) if len(info.extra_args) > 0 else '')
             suffix = " (restore session)" if is_session_restoration else ""
-            print(f"\x1b[2KTrying to crack {str(capture_file_path)} with '{what}' by {tool}{suffix}...") # FIXME
+            printc(f"Trying to crack {str(capture_file_path)} with '{what}' by {tool}{suffix}...")
 
             result = _crack_one(tool_cls,
                                 capture_file_path,
@@ -446,10 +455,12 @@ def crack(aircrack_capture_file_path: Path,
     has_masks = any(info.kind == TaskKind.MASK for info in tasks.values())
 
     # `aircrack-ng` only works with wordlists
-    hashcat_capture_file_path = None
     if not prefer_aircrack or has_masks:
         hashcat_capture_file_path = aircrack_capture_file_path.with_suffix(".hccapx")
         convert_aircrack_capture_to_hashcat_format(aircrack_capture_file_path, hashcat_capture_file_path)
+
+    else:
+        hashcat_capture_file_path = None
 
     progress_file_path = progress_file_path or aircrack_capture_file_path.with_suffix(".progress.json")
 
@@ -464,10 +475,10 @@ def crack(aircrack_capture_file_path: Path,
                      progress,
                      prefer_aircrack)
         if key:
-            print(f"\x1b[2KFound key: '{key}'!") # FIXME
+            printc(f"Found key: '{key}'!")
             return
 
-    print("\x1b[2KKey is not found") # FIXME
+    printc("Key is not found")
 
 
 """
@@ -479,7 +490,7 @@ def on_dump(args: argparse.Namespace):
 
 
 def on_handshake(args: argparse.Namespace):
-    handshake(args.iface, args.strategy, args.channel, args.bssid, args.output_dir)
+    handshake(args.iface, args.attack, args.channel, args.bssid, args.output_dir)
 
 
 def on_splitter(args: argparse.Namespace):
@@ -519,8 +530,10 @@ def main():
                                              help="Get a handshake")
     handshake_parser.add_argument("iface",
                                   help="Wireless iface for monitoring")
-    handshake_parser.add_argument("strategy",
-                                  help="Strategy for `aireplay-ng`") # FIXME (enum)
+    handshake_parser.add_argument("attack",
+                                  help="Attack method for `aireplay-ng`",
+                                  type=HandshakeAttack,
+                                  choices=list(HandshakeAttack))
     handshake_parser.add_argument("--channel",
                                   help="Channel of an access point",
                                   type=int,
