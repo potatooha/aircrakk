@@ -319,15 +319,15 @@ def create_tasks_config_file(wordlists: list[Path],
 @dataclasses.dataclass
 class CrackResult:
     key: str | None
-    is_failed: bool
+    failed: bool
 
     @staticmethod
     def from_found_key(key: str) -> CrackResult:
-        return CrackResult(key=key, is_failed=False)
+        return CrackResult(key=key, failed=False)
 
     @staticmethod
-    def from_failed_or_exhausted(*, is_failed: bool) -> CrackResult:
-        return CrackResult(key=None, is_failed=is_failed)
+    def from_failed_or_exhausted(*, failed: bool) -> CrackResult:
+        return CrackResult(key=None, failed=failed)
 
 
 def _crack_one(tool_cls,
@@ -353,7 +353,7 @@ def _crack_one(tool_cls,
                     printc(f"Failed to crack: {exit_info.returncode}")
                 else:
                     printc("Key is not found", end='\r', flush=True)
-                return CrackResult.from_failed_or_exhausted(is_failed=exit_info.is_error)
+                return CrackResult.from_failed_or_exhausted(failed=exit_info.is_error)
 
             info = tool.get_progress_info()
             if not info.last_passphrase:
@@ -392,6 +392,10 @@ def _crack(aircrack_capture_file_path: Path,
     for task, info in tasks.items():
         if progress.is_finished(task):
             printc(f"Skipping exhausted '{task}'")
+            continue
+
+        if info.disabled:
+            printc(f"Skipping disabled '{task}...")
             continue
 
         preferred_tool = info.preferred_tool or (CrackTool.AIRCRACK if prefer_aircrack else CrackTool.HASHCAT)
@@ -433,7 +437,7 @@ def _crack(aircrack_capture_file_path: Path,
                                 extra_args=info.extra_args,
                                 session=session)
 
-            if is_session_restoration and not result.key and result.is_failed:
+            if is_session_restoration and not result.key and result.failed:
                 # Could not restore the previous session. Fallback to a new one
                 session.mode = CrackSessionMode.CREATE
                 continue
@@ -444,7 +448,7 @@ def _crack(aircrack_capture_file_path: Path,
             progress.finish_with_key(task, result.key)
             statistics.increment(task)
 
-        elif result.is_failed:
+        elif result.failed:
             progress.finish_failed(task)
 
         else:

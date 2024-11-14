@@ -14,6 +14,7 @@ class TaskKind(enum.StrEnum):
 @dataclasses.dataclass
 class TaskInfo:
     kind: TaskKind
+    disabled: bool
     preferred_tool: CrackTool | None
     extra_args: list[str]
     comment: str | None
@@ -27,11 +28,12 @@ def load_tasks(path: Path) -> dict[str, TaskInfo]:
 
     for task, fields in raw_tasks.items():
         kind = TaskKind(fields['kind'])
+        disabled = fields.get('disabled', False)
         preferred_tool = CrackTool(tool) if (tool := fields.get('preferred_tool', None)) else None
         extra_args = fields.get('extra_args', [])
         comment = fields.get('comment', None)
 
-        tasks[task] = TaskInfo(kind, preferred_tool, extra_args, comment)
+        tasks[task] = TaskInfo(kind, disabled, preferred_tool, extra_args, comment)
 
     return tasks
 
