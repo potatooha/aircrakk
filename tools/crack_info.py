@@ -11,6 +11,7 @@ class CrackProgressInfo:
     speed: str | None
     percentage: str | None
     last_passphrase: str | None
+    hardware_state: dict[str, str]
 
 
 @dataclasses.dataclass

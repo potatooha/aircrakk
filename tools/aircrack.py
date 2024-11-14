@@ -38,7 +38,7 @@ class _AircrackReader(Reader):
             percentage = self._percentage
             last_passphrase = self._last_passphrase
 
-        return CrackProgressInfo(speed, percentage, last_passphrase)
+        return CrackProgressInfo(speed, percentage, last_passphrase, hardware_state={})
 
     def get_key_if_found(self) -> str | None:
         with self._lock:
@@ -65,7 +65,7 @@ class _AircrackReader(Reader):
 
         # Time left: --
         # Time left: 2 minutes, 40 seconds                           0.40%
-        match = re.search(r"Time left: .+(\d+\.\d+%)", line, flags=re.IGNORECASE)
+        match = re.search(r"Time left: .+?(\d+\.\d+%)", line, flags=re.IGNORECASE)
         if match:
             percentage = match.group(1)
 
@@ -106,6 +106,8 @@ class _AircrackReader(Reader):
             with self._lock:
                 if self._key:
                     raise RuntimeError(f"Unexpected line: '{line}'")
+
+            return
 
 
 class Aircrack(Runner):

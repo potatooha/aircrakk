@@ -34,18 +34,20 @@ class _HashcatReader(Reader):
     def __init__(self):
         super().__init__()
         self._lock = threading.Lock()
+        self._is_key_found = False
         self._speed = None
         self._percentage = None
         self._last_passphrase = None
-        self._is_key_found = False
+        self._hardware_state = None
 
     def get_progress_info(self) -> CrackProgressInfo:
         with self._lock:
             speed = self._speed
             percentage = self._percentage
             last_passphrase = self._last_passphrase
+            hardware_state = self._hardware_state
 
-        return CrackProgressInfo(speed, percentage, last_passphrase)
+        return CrackProgressInfo(speed, percentage, last_passphrase, hardware_state)
 
     def get_key_if_found(self) -> str | None:
         with self._lock:
@@ -54,6 +56,27 @@ class _HashcatReader(Reader):
     def _process_stdout(self, line: bytes):
         line = line.decode()
         line = line.strip()
+
+        # Status...........: Running
+        # Status...........: Exhausted
+        # Status...........: Cracked
+        match = re.match(r"Status.+: (.+)", line, flags=re.IGNORECASE)
+        if match:
+            status = match.group(1)
+
+            if status.casefold() == "Cracked".casefold():
+                with self._lock:
+                    if self._is_key_found or not self._last_passphrase:
+                        raise RuntimeError(f"Unexpected line: '{line}'")
+
+                    self._is_key_found = True
+
+            else:
+                with self._lock:
+                    if self._is_key_found:
+                        raise RuntimeError(f"Unexpected line: '{line}'")
+
+            return
 
         # Speed.#1.........:    17848 H/s (10.31ms) @ Accel:256 Loops:256 Thr:1 Vec:8
         match = re.search(r"Speed.+:\s+(.+) \(", line, flags=re.IGNORECASE)
@@ -88,27 +111,18 @@ class _HashcatReader(Reader):
 
             return
 
-        # Status...........: Running
-        # Status...........: Exhausted
-        # Status...........: Cracked
-        match = re.match(r"Status.+: (.+)", line, flags=re.IGNORECASE)
+        # Hardware.Mon.#1..: Temp: 53c Util: 13%
+        match = re.match(r"Hardware\.Mon.+?: Temp: (.+) Util: (\d+%)", line, flags=re.IGNORECASE)
         if match:
-            status = match.group(1)
+            hardware_state = {
+                'temp': match.group(1),
+                'util': match.group(2),
+            }
 
-            if status.casefold() == "Cracked".casefold():
-                with self._lock:
-                    if self._is_key_found or not self._last_passphrase:
-                        raise RuntimeError(f"Unexpected line: '{line}'")
-
-                    self._is_key_found = True
-
-            else:
-                with self._lock:
-                    if self._is_key_found:
-                        raise RuntimeError(f"Unexpected line: '{line}'")
+            with self._lock:
+                self._hardware_state = hardware_state
 
             return
-
 
 class _HashcatWriter(Writer):
     def __init__(self):

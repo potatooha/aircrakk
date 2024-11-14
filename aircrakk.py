@@ -360,13 +360,18 @@ def _crack_one(tool_cls,
                 time.sleep(0.5)
                 continue
 
-            line = f"Last passphase: '{info.last_passphrase}'"
+            line = f"Candidate: '{info.last_passphrase}'"
 
             if info.speed:
                 line += ", speed: " + info.speed
 
             if info.percentage:
                 line += ", done: " + info.percentage
+
+            if info.hardware_state:
+                line += ", hardware:"
+                for key, value in info.hardware_state.items():
+                    line += " " + key + "=" + value
 
             line += ", keep searching..."
 
