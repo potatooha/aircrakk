@@ -193,7 +193,7 @@ def handshake(iface: str,
 def _split_one(wordlist_file, hashcat_file, nohashcat_file, min_length: int, max_length: int):
     for line in wordlist_file:
         password = line.removesuffix(b'\n')
-        password = line.removesuffix(b'\r')
+        password = password.removesuffix(b'\r')
 
         # $HEX[666f6f626172310d0a]
         match = re.match(rb"\$HEX\[(\d+)]\s*", password)
