@@ -22,7 +22,7 @@ from tools.airodump import AccessPoint, Station, Dump
 from tools.cap2hccapx import convert_aircrack_capture_to_hashcat_format
 from tools.crack_info import CrackSessionMode, CrackSession
 from tools.file import is_text_file
-from tools.hashcat import Hashcat, get_supported_password_lengths
+from tools.hashcat import HashcatWorkloadProfile, Hashcat, get_supported_password_lengths
 from utils.ansi import printc
 from utils.dumping import get_table, get_dataclass_getter
 
@@ -337,11 +337,13 @@ def _crack_one(tool_cls,
                wordlist_file_path: Path | None,
                mask: str | None,
                extra_args: list[str],
+               workload_profile: HashcatWorkloadProfile,
                session: CrackSession) -> CrackResult:
     with tool_cls(capture_file_path,
                   wordlist_file_path=wordlist_file_path,
                   mask=mask,
                   extra_args=extra_args,
+                  workload_profile=workload_profile,
                   session=session) as tool:
         while True:
             key = tool.get_key_if_found()
@@ -385,6 +387,7 @@ def _crack(aircrack_capture_file_path: Path,
            tasks: dict[str, TaskInfo],
            statistics: Statistics,
            progress: Progress,
+           workload_profile: HashcatWorkloadProfile,
            prefer_aircrack: bool) -> str | None:
     key = progress.get_key_if_found()
     if key:
@@ -441,6 +444,7 @@ def _crack(aircrack_capture_file_path: Path,
                                 wordlist_file_path=wordlist_file_path,
                                 mask=mask,
                                 extra_args=info.extra_args,
+                                workload_profile=workload_profile,
                                 session=session)
 
             if is_session_restoration and not result.key and result.failed:
@@ -465,6 +469,7 @@ def crack(aircrack_capture_file_path: Path,
           tasks_config_file_path: Path,
           statistics_file_path: Path,
           progress_file_path: Path | None,
+          workload_profile: HashcatWorkloadProfile,
           prefer_aircrack: bool):
     tasks = load_tasks(tasks_config_file_path)
     has_masks = any(info.kind == TaskKind.MASK for info in tasks.values())
@@ -488,6 +493,7 @@ def crack(aircrack_capture_file_path: Path,
                      tasks,
                      statistics,
                      progress,
+                     workload_profile,
                      prefer_aircrack)
         if key:
             printc(f"Found key: '{key}'!")
@@ -517,7 +523,12 @@ def on_tasks(args: argparse.Namespace):
 
 
 def on_crack(args: argparse.Namespace):
-    crack(args.capture, args.tasks, args.statistics, args.progress, args.prefer_aircrack)
+    crack(args.capture,
+          args.tasks,
+          args.statistics,
+          args.progress,
+          args.workload_profile,
+          args.prefer_aircrack)
 
 
 def main():
@@ -608,6 +619,11 @@ def main():
     crack_parser.add_argument("--progress",
                               help="Task progress file (will create a new one if it not exists)",
                               type=Path)
+    crack_parser.add_argument("--workload_profile",
+                              help="`hashcat` workload profile",
+                              type=HashcatWorkloadProfile,
+                              choices=list(HashcatWorkloadProfile),
+                              default=HashcatWorkloadProfile.HIGH)
     crack_parser.add_argument("--prefer_aircrack",
                               action='store_true')
     crack_parser.set_defaults(handler=on_crack)

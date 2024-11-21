@@ -133,11 +133,11 @@ class _HashcatWriter(Writer):
         return b"s"
 
 
-class HashcatWorkloadProfile(enum.Enum):
-    LOW = 1
-    DEFAULT = 2
-    HIGH = 3
-    NIGHTMARE = 4
+class HashcatWorkloadProfile(enum.StrEnum):
+    LOW = '1'
+    DEFAULT = '2'
+    HIGH = '3'
+    NIGHTMARE = '4'
 
 
 class Hashcat(Runner):
@@ -162,7 +162,7 @@ class Hashcat(Runner):
 
             args.extend([
                 "-m", "2500", "--deprecated-check-disable", # WPA-EAPOL-PBKDF2
-                "-w", str(profile.value),
+                "-w", profile.value,
                 str(capture_file_path),
             ])
 
