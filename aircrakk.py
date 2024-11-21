@@ -593,7 +593,7 @@ def main():
                               action='append',
                               default=[])
     tasks_parser.add_argument("--mask",
-                              help="Brute-force attack mask",
+                              help="Brute-force attack mask (or mask,extra_arg1,extra_arg2...)",
                               action='append',
                               default=[])
     tasks_parser.add_argument("--output",
