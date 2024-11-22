@@ -71,8 +71,8 @@ Most likely you will want to edit it manually. I hope it will not be difficult. 
 
 ### Cracking
 
-    python3 aircrackk.py crack <--capture an input .cap file> <--tasks task configuration file> <--statistics task statistics file (will create new one if not exists)> [--progress cracking progress file (will create new one if not exists; the default path is next to a .cap file)] [--workload_profile hashcat workload profile] [--prefer_aircrack]
+    python3 aircrakk.py crack <--capture input .cap file> <--tasks task configuration file> <--statistics task statistics file (will create new one if not exists)> [--progress cracking progress file (will create new one if not exists; the default path is next to a .cap file)] [--workload_profile hashcat workload profile] [--prefer_aircrack]
 
 For example:
 
-    python3 aircrackk.py crack --capture ~/crakk/aadeadbeefaa/dump-01.cap --tasks ~/crakk/tasks.json --statistics ~/crakk/stats.json
+    python3 aircrakk.py crack --capture ~/crakk/aadeadbeefaa/dump-01.cap --tasks ~/crakk/tasks.json --statistics ~/crakk/stats.json
