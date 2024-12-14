@@ -382,6 +382,26 @@ def _crack_one(tool_cls,
             time.sleep(1)
 
 
+def _make_new_session(aircrack_capture_file_path: Path, task: str) -> CrackSession:
+    session_dir_name = aircrack_capture_file_path.with_suffix(".sessions").name
+    session_dir = aircrack_capture_file_path.parent / session_dir_name
+    session_dir.mkdir(parents=True, exist_ok=True)
+
+    session_file_name = hashlib.md5(task.encode()).hexdigest() + ".session"
+    session_file_path = session_dir / session_file_name
+    session_file_path.unlink(missing_ok=True)
+    return CrackSession(session_file_path, CrackSessionMode.CREATE)
+
+
+def _restore_session(session_file_path: Path) -> CrackSession:
+    return CrackSession(session_file_path, CrackSessionMode.RESTORE)
+
+
+def _fallback_to_new_session(session: CrackSession):
+    session.path.unlink(missing_ok=True)
+    session.mode = CrackSessionMode.CREATE
+
+
 def _crack(aircrack_capture_file_path: Path,
            hashcat_capture_file_path: Path | None,
            tasks: dict[str, TaskInfo],
@@ -395,11 +415,15 @@ def _crack(aircrack_capture_file_path: Path,
 
     for task, info in tasks.items():
         if progress.is_finished(task):
-            printc(f"Skipping exhausted '{task}'")
+            printc(f"Skipping exhausted '{task}'...")
             continue
 
         if info.disabled:
-            printc(f"Skipping disabled '{task}...")
+            printc(f"Skipping disabled '{task}'...")
+            continue
+
+        if info.kind == TaskKind.WORDLIST and not Path(task).is_file():
+            printc(f"Skipping not available '{task}'...")
             continue
 
         preferred_tool = info.preferred_tool or (CrackTool.AIRCRACK if prefer_aircrack else CrackTool.HASHCAT)
@@ -414,23 +438,16 @@ def _crack(aircrack_capture_file_path: Path,
             tool_cls = Hashcat
             capture_file_path = hashcat_capture_file_path
 
-        if (session_file_path := progress.get_session_if_in_progress(task, tool)):
-            session = CrackSession(session_file_path, CrackSessionMode.RESTORE)
+        if (existing_session_file_path := progress.get_session_if_in_progress(task, tool)):
+            session = _restore_session(existing_session_file_path)
 
         else:
-            session_dir_name = aircrack_capture_file_path.with_suffix(".sessions").name
-            session_dir = aircrack_capture_file_path.parent / session_dir_name
-            session_dir.mkdir(parents=True, exist_ok=True)
-
-            session_file_name = hashlib.md5(task.encode()).hexdigest() + ".session"
-            session_file_path = session_dir / session_file_name
-            session_file_path.unlink(missing_ok=True)
-            session = CrackSession(session_file_path, CrackSessionMode.CREATE)
+            session = _make_new_session(aircrack_capture_file_path, task)
 
         while True:
             is_session_restoration = session.mode.should_restore()
 
-            progress.start(task, tool, session_file_path)
+            progress.start(task, tool, session.path)
 
             wordlist_file_path = Path(task) if info.kind == TaskKind.WORDLIST else None
             mask = task if info.kind == TaskKind.MASK else None
@@ -449,7 +466,7 @@ def _crack(aircrack_capture_file_path: Path,
 
             if is_session_restoration and not result.key and result.failed:
                 # Could not restore the previous session. Fallback to a new one
-                session.mode = CrackSessionMode.CREATE
+                _fallback_to_new_session(session)
                 continue
 
             break
