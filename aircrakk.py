@@ -474,12 +474,15 @@ def _crack(aircrack_capture_file_path: Path,
         if result.key:
             progress.finish_with_key(task, result.key)
             statistics.increment(task)
+            return result.key
 
         elif result.failed:
             progress.finish_failed(task)
 
         else:
             progress.finish_exhausted(task)
+
+    return None
 
 
 def crack(aircrack_capture_file_path: Path,
